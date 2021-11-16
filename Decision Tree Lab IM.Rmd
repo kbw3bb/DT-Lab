@@ -1,0 +1,292 @@
+---
+title: "Decision Tree Lab IM"
+author: "Iain Muir"
+date: "11/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Congrats! You just graduated UVA's MSDS program and got a job working at the Treasury Department. In partnership with Congress members the Treasury has been ask to come up with innovative ways to create tax policy. In doing so they want to be able to reliably predict whether American workers make more than $50,000 a year and also which variables seem to be most contributing to predicting this outcome. 
+
+You would like to be able to explain the model to the mere mortals around you but need a fairly robust and flexible approach so you've chosen to use decision trees to get started and will possibly move to a ensemble model if needed. 
+
+In doing so, similar to great data scientists of the past you remembered the excellent education provided to you at UVA in a undergrad data science course and have outline 20ish steps that will need to be undertaken to complete this task (you can add more or combine if needed). As always, you will need to make sure to #comment your work heavily. 
+
+ Footnotes: 
+-	You can add or combine steps if needed
+-	Also, remember to try several methods during evaluation and always be 
+mindful of how the model will be used in practice.
+- Make sure all your variables are the correct type (factor, character, etc.)
+
+# Step 0
+Import Libraries
+
+```{r}
+# install.packages("rio")
+library(rio)
+library(plyr)
+library(tidyverse)
+library(rpart)
+library(psych)
+library(pROC)
+# install.packages("rpart.plot")
+library(rpart.plot)
+# install.packages("rattle")
+library(rattle)
+library(caret)
+library(C50)
+# install.packages("mlbench")
+library(mlbench)
+```
+
+### Step 1
+Load the data, check for missing data and ensure the labels are correct. 
+```{r}
+# https://www.rdocumentation.org/packages/arules/versions/1.6-8/topics/Adult
+# https://rpubs.com/Net/IncomeLevelClassification#:~:text=marital%2Dstatus%3A%20marital%20status%20of,spouse%20in%20the%20Armed%20Forces.
+url <- "http://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
+xx <- readr::read_csv(url, col_names=FALSE)
+View(xx)
+```
+
+```{r}
+# Output Dimensions
+cat("Shape:", dim(xx), "\n")
+```
+
+```{r}
+# Peep first five rows
+head(xx)
+```
+
+```{r}
+# Copy the Data Set
+DATA = xx
+```
+
+```{r}
+# Improve Quality of Column Labels
+names(DATA) <- c(
+  'age', 'workclass', 'fnlwgt', 'education', 'education_num', 'marital_status', 'occupation', 'relationship',
+  'race', 'sex', 'capital_gain', 'capital_loss', 'hours_per_week', 'native_country', 'income'
+)
+head(DATA)
+```
+
+```{r}
+cat("Columns:", names(DATA))
+```
+
+```{r}
+# Remove Null and Fake Null ("?") Data Points
+cat("NULL:", sum(is.na(DATA)))
+
+DATA <- DATA %>% 
+  filter(workclass != "?", occupation != "?", native_country != "?")
+
+cat("New Shape:", dim(DATA))
+```
+
+### Step 2
+Ensure all the variables are classified correctly including the target variable
+```{r}
+# View Data Set structure
+str(DATA)
+```
+
+```{r}
+# Convert Categorical to Factor Variables
+DATA[,c(2, 5:9, 13, 14)] <- lapply(DATA[,c(2, 5:9, 13, 14)], as.factor)
+```
+
+```{r include=False}
+# Explore Categorical Variables
+table(DATA$`workclass`) # Remove ? 
+table(DATA$`education`) # Factor Collapse
+table(DATA$`education_num`) # DELETE? -- Duplicate
+table(DATA$`marital_status`) # Factor Collapse?
+table(DATA$`occupation`) # Remove ? 
+table(DATA$`relationship`) # Fine?
+table(DATA$`race`) # Fine?
+table(DATA$`sex`) # Fine?
+table(DATA$`native_country`) # Remove ? 
+table(DATA$`income`) # Fine
+```
+
+```{r}
+# ----- Factor Collapse Multiple Variables -----
+
+# education
+DATA$`education` <- fct_collapse(
+  DATA$`education`,
+  Pre_HS=c("Preschool", "1st-4th", "5th-6th", "7th-8th"),
+  HS=c("9th", "10th", "11th", "12th", "HS-grad"),
+  College=c("Some-college", "Assoc-voc", "Assoc-acdm", "Bachelors"),
+  Post_Grad=c("Masters", "Prof-school", "Doctorate")
+)
+# Delete duplicate education_num
+DATA <- DATA[, -5]
+cat("New Shape:", dim(DATA))
+
+# marital_status
+DATA$`marital_status` <- fct_collapse(
+  DATA$`marital_status`,
+  Never_Married=Never-married,
+  Married=c("Married-civ-spouse", "Married-spouse-absent", "Married-AF-spouse"),
+  Separated=c("Separated", "Divorced", "Widowed"),
+)
+
+# occupation?
+DATA$`occupation` <- fct_collapse(
+  DATA$`occupation`,
+  Pre_HS=c("Preschool", "1st-4th", "5th-6th", "7th-8th"),
+  HS=c("9th", "10th", "11th", "12th", "HS-grad"),
+  College=c("Some-college", "Assoc-voc", "Assoc-acdm", "Bachelors"),
+  Post_Grad=c("Masters", "Prof-school", "Doctorate")
+)
+
+# native_country
+DATA$`native_country` <- fct_collapse(
+  DATA$`native_country`,
+  North_America=c("Canada", "1st-4th", "5th-6th", "7th-8th"),
+  South_America=c("9th", "10th", "11th", "12th", "HS-grad"),
+  Europe=c("Some-college", "Assoc-voc", "Assoc-acdm", "Bachelors"),
+  Asia=c("Cambodia", "Prof-school", "Doctorate")
+)
+
+# TARGET: income
+
+```
+
+### Step 3
+Don't check for correlated variables....because it doesn't matter with Decision Trees...the make local greedy decisions. 
+
+### Step 4
+Guess what, you also don't need to standardize the data, because DTs don't give a ish, they make local decisions...keeps getting easier
+
+### Step 5
+Determine the baserate or prevalence for the classifier, what does this number mean? 
+```{r}
+# View # of Data Points by Class
+table(DATA$`income`)
+
+less_than = 22654 # <50k
+more_than = 7508  # >50k
+
+# Calculate Prevalence
+  # ~62% of people in the dataset make less than $50,000
+prevalence = less_than / (less_than + more_than)
+prevalence
+```
+
+### Step 6
+Split your data into test, tune, and train. (70/15/15)
+```{r}
+# Split/Partition to create the train set 
+split1 <- caret::createDataPartition(
+    DATA$income,
+    times=1,
+    p = 0.70,
+    groups=1,
+    list=FALSE
+)
+
+train <- DATA[split1, ]
+tune_and_test <- DATA[-split1, ]
+
+# Split/Partition again to create the tuning and test set 
+split2 <- caret::createDataPartition(
+    tune_and_test$income,
+    times=1,
+    p = 0.5,
+    list=FALSE
+)
+
+tune <- tune_and_test[split2, ]
+test <- tune_and_test[-split2, ]
+```
+
+```{r}
+dim(train)
+dim(tune)
+dim(test)
+```
+
+### Step 7
+Build your model using the training data and default settings in caret, double check to make sure you are using a cross-validation training approach
+```{r}
+
+```
+
+### Step 8
+View the results, what is the most important variable for the tree? 
+```{r}
+
+```
+
+### Step 9
+Plot the output of the model to see the tree visually 
+```{r}
+
+```
+
+### Step 10
+Use the validation set and the predict function with your model to the estimate the target variable.
+```{r}
+
+```
+
+### Step 11
+Compare the predicted values to those of the actual by generating a matrix ("by-hand").
+```{r}
+
+```
+
+### Step 12
+Use the the confusion matrix function to check a variety of metrics and comment on the metric that might be best for this type of analysis given your question. 
+```{r}
+ 
+```
+
+### Step 13
+Generate a ROC and AUC output, interpret the results
+```{r}
+
+```
+
+### Step 14
+Use the predict function to generate percentages, then select several different threshold levels using the confusion matrix function and interpret the results. What patterns did you notice, did the evaluation metrics change? 
+```{r}
+
+```
+
+### Step 15
+Based on your understanding of the model and data adjust several of the hyper-parameters via the built in train control function in caret or build and try new features, does the model quality improve? If so how and why, if not, why not?
+
+Use this link: https://rdrr.io/cran/caret/man/trainControl.html to select changes, you aren't expected to understand all these options but explore one or two and see what happens. 
+```{r}
+
+```
+
+### Step 16
+Once you are confident that your model is not improving, via changes implemented on the training set and evaluated on the the validation set (item 16), predict with the test set and report a final evaluation of the model. Discuss the output in comparison with the previous evaluations.
+```{r}
+  
+```
+
+### Step 17
+Summarize what you learned along the way and make recommendations on how this could be used moving forward, being careful not to over promise. 
+```{r}
+
+```
+
+### Step 18
+What was the most interesting or hardest part of this process and what questions do you still have? 
+```{r}
+
+```
+
+
